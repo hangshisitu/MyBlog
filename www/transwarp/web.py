@@ -4,10 +4,18 @@
 __author_ = 'Tony Xiao'
 
 '''
-Database operation module.
+A simple, lightweight, WSGI-compatible web framework.
 '''
 
-import time,uuid,functools,threading,logging
+import types,os,re,cgi,sys,time,datetime,functools,mimetypes,threading,logging,urllib,traceback
+
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
+# thread local object for storing request and response:
+ctx = threading.local()
 
 # Dict object:
 
@@ -55,419 +63,565 @@ class Dict(dict):
     def __setattr__(self,key,value):
         self[key] = value;
 
-def next_id(t=None):
+_TIMEDELTA_ZERO = datetime.timedelta(0)
+
+# timezone as UTC+8:00, UTC-10:00
+_RE_TZ = re.compile('^([\+\-])([0-9]{1,2})\:([0-9]{1,2})$')
+
+class UTC(datetime.tzinfo):
     '''
-    :param t: unix timestamp ,default to None ans using time.time().
-    :return: next id as 50-char string.
+    A UTC tzinfo object.
+
+    >>> tz0 = UTC('+00:00')
+    >>> tz0.tzname(None)
+    'UTC+00:00'
+    >>> tz8 = UTC('+8:00')
+    >>> tz8.tzname(None)
+    'UTC+8:00'
+    >>> tz7 = UTC('+7:30')
+    >>> tz7.tzname(None)
+    'UTC+7:30'
+    >>> tz5 = UTC('-05:30')
+    >>> tz5.tzname(None)
+    'UTC-05:30'
+    >>> from datetime import datetime
+    >>> u = datetime.utcnow().replace(tzinfo=tz0)
+    >>> l1 = u.astimezone(tz8)
+    >>> l2 = u.replace(tzinfo=tz8)
+    >>> d1 = u - l1
+    >>> d2 = u - l2
+    >>> d1.seconds
+    0
+    >>> d2.seconds
+    28800
     '''
-    if t is None:
-        t = time.time();
-    return '%015d%s000' % (int(t*1000),uuid.uuid4().hex)
 
-def _profiling(start,sql=''):
-    t = time.time() - start
-    if t > 0.1:
-        logging.warning('[PROFILING] [DB] %s: %s' % (t,sql))
-    else:
-        logging.info('[PROFILING] [DB] %s: %s' % (t,sql))
+    def __init__(self,utc):
+        utc = str(utc.strip().upper())
+        mt = _RE_TZ.match(utc)
+        if mt:
+            minus = mt.group(1)=='-'
+            h = int(mt.group(2))
+            m = int(mt.group(3))
+            if minus:
+                h,m = (-h), (-m)
+                self._utcoffset = datetime.timedelta(hours=h,minutes=m)
+                self._tzname = 'UTC%s' % utc
+        else:
+            raise ValueError('bad utc time zone')
+    def utcoffset(self, dt):
+        return self._utcoffset
 
-class DBError(Exception):
-    pass
+    def dst(self, dt):
+        return _TIMEDELTA_ZERO
 
-class MultiColumnsError(DBError):
-    pass
+    def tzname(self, dt):
+        return self._tzname
 
-class _LasyConnection(object):
-    def __init__(self):
-        self.connection = None;
+    def __str__(self):
+        return 'UTC tzinfo object (%s)' % self._tzname
+    __repr__ = __str__
 
-    def cursor(self):
-        if self.connection is None:
-            connection = engine.connect();
-            logging.info('open connection <%s>...' % hex(id(connection)))
-            self.connection = connection
-        return self.connection.cursor();
+# all known response statues:
 
-    def commit(self):
-        self.connection.commit();
+_RESPONSE_STATUSES = {
+    # Informational
+    100: 'Continue',
+    101: 'Switching Protocols',
+    102: 'Processing',
 
-    def rollback(self):
-        self.connection.rollback();
+    # Successful
+    200: 'OK',
+    201: 'Created',
+    202: 'Accepted',
+    203: 'Non-Authoritative Information',
+    204: 'No Content',
+    205: 'Reset Content',
+    206: 'Partial Content',
+    207: 'Multi Status',
+    226: 'IM Used',
 
-    def cleanup(self):
-        if self.connection:
-            connection = self.connection;
-            self.connection = None
-            logging.info('close connection <%s>...' % hex(id(connection)))
-            connection.close()
+    # Redirection
+    300: 'Multiple Choices',
+    301: 'Moved Permanently',
+    302: 'Found',
+    303: 'See Other',
+    304: 'Not Modified',
+    305: 'Use Proxy',
+    307: 'Temporary Redirect',
 
-class _DbCtx(threading.local):
+    # Client Error
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    402: 'Payment Required',
+    403: 'Forbidden',
+    404: 'Not Found',
+    405: 'Method Not Allowed',
+    406: 'Not Acceptable',
+    407: 'Proxy Authentication Required',
+    408: 'Request Timeout',
+    409: 'Conflict',
+    410: 'Gone',
+    411: 'Length Required',
+    412: 'Precondition Failed',
+    413: 'Request Entity Too Large',
+    414: 'Request URI Too Long',
+    415: 'Unsupported Media Type',
+    416: 'Requested Range Not Satisfiable',
+    417: 'Expectation Failed',
+    418: "I'm a teapot",
+    422: 'Unprocessable Entity',
+    423: 'Locked',
+    424: 'Failed Dependency',
+    426: 'Upgrade Required',
+
+    # Server Error
+    500: 'Internal Server Error',
+    501: 'Not Implemented',
+    502: 'Bad Gateway',
+    503: 'Service Unavailable',
+    504: 'Gateway Timeout',
+    505: 'HTTP Version Not Supported',
+    507: 'Insufficient Storage',
+    510: 'Not Extended',
+}
+
+_RE_RESPONSE_STATUS = re.compile(r'^\d\d\d(\ [\w\ ]+)?$')
+
+_RESPONSE_HEADERS = (
+    'Accept-Ranges',
+    'Age',
+    'Allow',
+    'Cache-Control',
+    'Connection',
+    'Content-Encoding',
+    'Content-Language',
+    'Content-Length',
+    'Content-Location',
+    'Content-MD5',
+    'Content-Disposition',
+    'Content-Range',
+    'Content-Type',
+    'Date',
+    'ETag',
+    'Expires',
+    'Last-Modified',
+    'Link',
+    'Location',
+    'P3P',
+    'Pragma',
+    'Proxy-Authenticate',
+    'Refresh',
+    'Retry-After',
+    'Server',
+    'Set-Cookie',
+    'Strict-Transport-Security',
+    'Trailer',
+    'Transfer-Encoding',
+    'Vary',
+    'Via',
+    'Warning',
+    'WWW-Authenticate',
+    'X-Frame-Options',
+    'X-XSS-Protection',
+    'X-Content-Type-Options',
+    'X-Forwarded-Proto',
+    'X-Powered-By',
+    'X-UA-Compatible',
+)
+
+_RESPONSE_HEADER_DICT = dict(zip(map(lambda x: x.upper(), _RESPONSE_HEADERS), _RESPONSE_HEADERS))
+
+_HEADER_X_POWERED_BY = ('X-Powered-By', 'transwarp/1.0')
+
+class HttpError(Exception):
     '''
-    Thread local object that holds connection info.
+    HttpError that defines http error code.
+    >>> e = HttpError(404)
+    >>> e.status
+    '404 Not Found'
     '''
-    def __init__(self):
-        self.connection = None
-        self.transactions = 0
 
-    def is_init(self):
-        return not self.connection is None
-
-    def init(self):
-        logging.info('open lazy connection...')
-        self.connection = _LasyConnection();
-        self.transactions = 0;
-
-    def cleanup(self):
-        self.connection.cleanup()
-        self.connection = None;
-
-    def cursor(self):
+    def __init__(self,code):
         '''
-        :return: cursor
+        Init an HttpError with response code.
         '''
+        super(HttpError,self).__init__()
+        self.status = '%d %s' % (code,_RE_RESPONSE_STATUS[code])
 
-        return self.connection.cursor();
+    def header(self,name,value):
+        if not hasattr(self,'_headers'):
+            self._headers = [_HEADER_X_POWERED_BY]
+        self._headers.append((name),value)
 
-# thread-local db context:
-_db_ctx = _DbCtx()
+    @property
+    def headers(self):
+        if hasattr(self,'_headers'):
+            return self._headers
+        return []
 
-# global engine object:
-engine = None
+    def __str__(self):
+        return self.status
 
-class _Engine(object):
-    def __init__(self,connect):
-        self._connect = connect
+    __repr__ = __str__
 
-    def connect(self):
-        return self._connect()
-
-def create_engine(user,password,database,host='127.0.0.1',port=3306,**kw):
-    import mysql.connector
-    global engine
-    if engine is not None:
-        raise DBError('Engine is already initialized.')
-    params = dict(user=user,password=password,database=database,host=host,port=port)
-    defaults = dict(use_unicode=True,charset='utf8',collation='utf8_general_ci',autocommit=False)
-    for k,v in defaults.iteritems():
-        params[k] = kw.pop(k,v)
-    params.update(kw)
-    params['buffered'] = True
-    engine = _Engine(lambda: mysql.connector.connect(**params))
-    #test connection...
-    logging.info('Init mysql engine <%s> ok.' % hex(id(engine)))
-
-class _ConnectionCtx(object):
+class RedirectError(HttpError):
     '''
-    _ConnectionCtx object that can open and close connection context. _ConnectionCtx object can be nested and only the most
-    outer connection has effect.
+    RedirectError that defines http redirect code.
 
-    with connection():
+    >>> e = RedirectError(302, 'http://www.apple.com/')
+    >>> e.status
+    '302 Found'
+    >>> e.location
+    'http://www.apple.com/'
+    '''
+    def __init__(self,code,location):
+        '''
+        Init an HttpError with response code.
+        '''
+        super(RedirectError,self).__init__(code)
+        self.location = location
+
+    def __str__(self):
+        return '%s, %s' % (self.status,self.location)
+
+    __repr__ = __str__
+
+def badrequest():
+    '''
+    Send a bad request response.
+
+    >>> raise badrequest()
+    Traceback (most recent call last):
+      ...
+    HttpError: 400 Bad Request
+    '''
+    return HttpError(400)
+
+def unauthorized():
+    '''
+    Send an unauthorized response.
+
+    >>> raise unauthorized()
+    Traceback (most recent call last):
+      ...
+    HttpError: 401 Unauthorized
+    '''
+    return HttpError(401)
+
+def forbidden():
+    '''
+    Send a forbidden response.
+
+    >>> raise forbidden()
+    Traceback (most recent call last):
+      ...
+    HttpError: 403 Forbidden
+    '''
+    return HttpError(403)
+
+def notfound():
+    '''
+    Send a not found response.
+
+    >>> raise notfound()
+    Traceback (most recent call last):
+      ...
+    HttpError: 404 Not Found
+    '''
+    return HttpError(404)
+
+def conflict():
+    '''
+    Send a conflict response.
+
+    >>> raise conflict()
+    Traceback (most recent call last):
+      ...
+    HttpError: 409 Conflict
+    '''
+    return HttpError(409)
+
+def internalerror():
+    '''
+    Send an internal error response.
+
+    >>> raise internalerror()
+    Traceback (most recent call last):
+      ...
+    HttpError: 500 Internal Server Error
+    '''
+    return HttpError(500)
+
+def redirect(location):
+    '''
+    Do permanent redirect.
+
+    >>> raise redirect('http://www.itranswarp.com/')
+    Traceback (most recent call last):
+      ...
+    RedirectError: 301 Moved Permanently, http://www.itranswarp.com/
+    '''
+    return RedirectError(301, location)
+
+def found(location):
+    '''
+    Do temporary redirect.
+
+    >>> raise found('http://www.itranswarp.com/')
+    Traceback (most recent call last):
+      ...
+    RedirectError: 302 Found, http://www.itranswarp.com/
+    '''
+    return RedirectError(302, location)
+
+def seeother(location):
+    '''
+    Do temporary redirect.
+
+    >>> raise seeother('http://www.itranswarp.com/')
+    Traceback (most recent call last):
+      ...
+    RedirectError: 303 See Other, http://www.itranswarp.com/
+    >>> e = seeother('http://www.itranswarp.com/seeother?r=123')
+    >>> e.location
+    'http://www.itranswarp.com/seeother?r=123'
+    '''
+    return RedirectError(303, location)
+
+def _to_str(s):
+    '''
+    Convert to str.
+
+    >>> _to_str('s123') == 's123'
+    True
+    >>> _to_str(u'\u4e2d\u6587') == '\xe4\xb8\xad\xe6\x96\x87'
+    True
+    >>> _to_str(-123) == '-123'
+    True
+    '''
+    if isinstance(s, str):
+        return s
+    if isinstance(s, unicode):
+        return s.encode('utf-8')
+    return str(s)
+
+def _to_unicode(s, encoding='utf-8'):
+    '''
+    Convert to unicode.
+
+    >>> _to_unicode('\xe4\xb8\xad\xe6\x96\x87') == u'\u4e2d\u6587'
+    True
+    '''
+    return s.decode('utf-8')
+
+def _quote(s, encoding='utf-8'):
+    '''
+    Url quote as str.
+
+    >>> _quote('http://example/test?a=1+')
+    'http%3A//example/test%3Fa%3D1%2B'
+    >>> _quote(u'hello world!')
+    'hello%20world%21'
+    '''
+    if isinstance(s, unicode):
+        s = s.encode(encoding)
+    return urllib.quote(s)
+
+def _unquote(s, encoding='utf-8'):
+    '''
+    Url unquote as unicode.
+
+    >>> _unquote('http%3A//example/test%3Fa%3D1+')
+    u'http://example/test?a=1+'
+    '''
+    return urllib.unquote(s).decode(encoding)
+
+def get(path):
+    '''
+    A @get decorator.
+    @get('/:id')
+    def index(id):
         pass
-        with connection():
-            pass
-    '''
-
-    def __enter__(self):
-        global _db_ctx
-        self.should_cleanup = False
-        if not _db_ctx.is_init():
-            _db_ctx.init()
-            self.should_cleanup = True
-        return self
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        global _db_ctx
-        if self.should_cleanup:
-            _db_ctx.cleanup()
-
-def connection():
-    '''
-    :return: _ConnectionCtx object that can be used by 'with' statement
-
-    with connection:
-        pass
-    '''
-    return _ConnectionCtx()
-
-def with_connection(func):
-    '''
-    Decorator for reuse connection.
-
-    @with_connection
-    def foo(*args, **kw):
-        f1()
-        f2()
-        f3()
-    :param func:
+    :param path:
     :return:
-    '''
-    @functools.wraps(func)
-    def _wrapper(*args,**kw):
-        with _ConnectionCtx():
-            return func(*args,**kw)
-    return _wrapper
 
-class _TransactionCtx(object):
+    >>> @get('/test/:id')
+    ... def test():
+    ...     return 'ok'
+    ...
+    >>> test.__web_route__
+    '/test/:id'
+    >>> test.__web_method__
+    'GET'
+    >>> test()
+    'ok'
     '''
-    _TransactionCtx object that can handle transactions.
-    with _TransactionCtx():
+    def _decorator(func):
+        func.__web_route__ = path
+        func.__web_method__ = 'GET'
+        return func
+    return _decorator
+
+def post(path):
+    '''
+    A @post decorator.
+    @get('/:id')
+    def index(id):
         pass
-    '''
+    :param path:
+    :return:
 
-    def __enter__(self):
-        global _db_ctx
-        self.should_close_conn = False
-        if not _db_ctx.is_init():
-            # needs open a connection first:
-            _db_ctx.init()
-            self.should_close_conn = True
-        _db_ctx.transactions = _db_ctx.transactions + 1
-        logging.info('begin transaction...' if _db_ctx.transactions==1 else 'join current transaction...')
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        global _db_ctx
-        _db_ctx.transactions = _db_ctx.transactions - 1
-        try:
-            if _db_ctx.transactions==0:
-                if exc_type is None:
-                    self.commit()
-                else:
-                    self.rollback()
-        finally:
-            if self.should_close_conn:
-                _db_ctx.cleanup()
-
-    def commit(self):
-        global _db_ctx
-        logging.info('commit transaction...')
-        try:
-            _db_ctx.connection.commit()
-            logging.info('commit ok.')
-        except:
-            logging.warning('commit failed. try rollback...')
-            _db_ctx.connection.rollbacl()
-            logging.warning('rollback ok.')
-            raise
-
-    def rollback(self):
-        global _db_ctx
-        logging.warning('rollback transaction...')
-        _db_ctx.connection.rollback()
-        logging.info('rollback ok.')
-
-def transaction():
+    >>> @post('/post/:id')
+    ... def testpost():
+    ...     return '200'
+    ...
+    >>> testpost.__web_route__
+    '/post/:id'
+    >>> testpost.__web_method__
+    'POST'
+    >>> testpost()
+    '200'
     '''
-    Create a transaction object so can use with statement:
-    with transaction():
-        pass
-    >>> def update_profile(id, name, rollback):
-    ...     u = dict(id=id, name=name, email='%s@test.org' % name, passwd=name, last_modified=time.time())
-    ...     insert('user', **u)
-    ...     r = update('update user set passwd=? where id=?', name.upper(), id)
-    ...     if rollback:
-    ...         raise StandardError('will cause rollback...')
-    >>> with transaction():
-    ...     update_profile(900301, 'Python', False)
-    >>> select_one('select * from user where id=?', 900301).name
-    u'Python'
-    >>> with transaction():
-    ...     update_profile(900302, 'Ruby', True)
-    Traceback (most recent call last):
-      ...
-    StandardError: will cause rollback...
-    >>> select('select * from user where id=?', 900302)
-    []
-    '''
-    return _TransactionCtx()
+    def _decorator(func):
+        func.__web_route__ = path
+        func.__web_method__ = 'POST'
+        return func
+    return _decorator
 
-def with_transaction(func):
-    '''
-    A decorator that makes function around transaction.
-    >>> @with_transaction
-    ... def update_profile(id, name, rollback):
-    ...     u = dict(id=id, name=name, email='%s@test.org' % name, passwd=name, last_modified=time.time())
-    ...     insert('user', **u)
-    ...     r = update('update user set passwd=? where id=?', name.upper(), id)
-    ...     if rollback:
-    ...         raise StandardError('will cause rollback...')
-    >>> update_profile(8080, 'Julia', False)
-    >>> select_one('select * from user where id=?', 8080).passwd
-    u'JULIA'
-    >>> update_profile(9090, 'Robert', True)
-    Traceback (most recent call last):
-      ...
-    StandardError: will cause rollback...
-    >>> select('select * from user where id=?', 9090)
-    []
-    '''
-    @functools.wraps(func)
-    def _wrapper(*args, **kw):
-        _start = time.time()
-        with _TransactionCtx():
-            return func(*args, **kw)
-        _profiling(_start)
-    return _wrapper
+_re_route = re.compile(r'(\:[a-zA-Z_]\w*)')
 
-def _select(sql, first, *args):
-    ' execute select SQL and return unique result or list results.'
-    global _db_ctx
-    cursor = None
-    sql = sql.replace('?', '%s')
-    logging.info('SQL: %s, ARGS: %s' % (sql, args))
-    try:
-        cursor = _db_ctx.connection.cursor()
-        cursor.execute(sql, args)
-        if cursor.description:
-            names = [x[0] for x in cursor.description]
-        if first:
-            values = cursor.fetchone()
-            if not values:
-                return None
-            return Dict(names, values)
-        return [Dict(names, x) for x in cursor.fetchall()]
-    finally:
-        if cursor:
-            cursor.close()
-
-@with_connection
-def select_one(sql, *args):
-    '''
-    Execute select SQL and expected one result.
-    If no result found, return None.
-    If multiple results found, the first one returned.
-    >>> u1 = dict(id=100, name='Alice', email='alice@test.org', passwd='ABC-12345', last_modified=time.time())
-    >>> u2 = dict(id=101, name='Sarah', email='sarah@test.org', passwd='ABC-12345', last_modified=time.time())
-    >>> insert('user', **u1)
-    1
-    >>> insert('user', **u2)
-    1
-    >>> u = select_one('select * from user where id=?', 100)
-    >>> u.name
-    u'Alice'
-    >>> select_one('select * from user where email=?', 'abc@email.com')
-    >>> u2 = select_one('select * from user where passwd=? order by email', 'ABC-12345')
-    >>> u2.name
-    u'Alice'
-    '''
-    return _select(sql, True, *args)
-
-@with_connection
-def select_int(sql, *args):
-    '''
-    Execute select SQL and expected one int and only one int result.
-    >>> n = update('delete from user')
-    >>> u1 = dict(id=96900, name='Ada', email='ada@test.org', passwd='A-12345', last_modified=time.time())
-    >>> u2 = dict(id=96901, name='Adam', email='adam@test.org', passwd='A-12345', last_modified=time.time())
-    >>> insert('user', **u1)
-    1
-    >>> insert('user', **u2)
-    1
-    >>> select_int('select count(*) from user')
-    2
-    >>> select_int('select count(*) from user where email=?', 'ada@test.org')
-    1
-    >>> select_int('select count(*) from user where email=?', 'notexist@test.org')
-    0
-    >>> select_int('select id from user where email=?', 'ada@test.org')
-    96900
-    >>> select_int('select id, name from user where email=?', 'ada@test.org')
-    Traceback (most recent call last):
-        ...
-    MultiColumnsError: Expect only one column.
-    '''
-    d = _select(sql, True, *args)
-    if len(d)!=1:
-        raise MultiColumnsError('Expect only one column.')
-    return d.values()[0]
-
-@with_connection
-def select(sql, *args):
-    '''
-    Execute select SQL and return list or empty list if no result.
-    >>> u1 = dict(id=200, name='Wall.E', email='wall.e@test.org', passwd='back-to-earth', last_modified=time.time())
-    >>> u2 = dict(id=201, name='Eva', email='eva@test.org', passwd='back-to-earth', last_modified=time.time())
-    >>> insert('user', **u1)
-    1
-    >>> insert('user', **u2)
-    1
-    >>> L = select('select * from user where id=?', 900900900)
-    >>> L
-    []
-    >>> L = select('select * from user where id=?', 200)
-    >>> L[0].email
-    u'wall.e@test.org'
-    >>> L = select('select * from user where passwd=? order by id desc', 'back-to-earth')
-    >>> L[0].name
-    u'Eva'
-    >>> L[1].name
-    u'Wall.E'
-    '''
-    return _select(sql, False, *args)
-
-@with_connection
-def _update(sql, *args):
-    global _db_ctx
-    cursor = None
-    sql = sql.replace('?', '%s')
-    logging.info('SQL: %s, ARGS: %s' % (sql, args))
-    try:
-        cursor = _db_ctx.connection.cursor()
-        cursor.execute(sql, args)
-        r = cursor.rowcount
-        if _db_ctx.transactions==0:
-            # no transaction enviroment:
-            logging.info('auto commit')
-            _db_ctx.connection.commit()
-        return r
-    finally:
-        if cursor:
-            cursor.close()
-
-def insert(table, **kw):
-    '''
-    Execute insert SQL.
-    >>> u1 = dict(id=2000, name='Bob', email='bob@test.org', passwd='bobobob', last_modified=time.time())
-    >>> insert('user', **u1)
-    1
-    >>> u2 = select_one('select * from user where id=?', 2000)
-    >>> u2.name
-    u'Bob'
-    >>> insert('user', **u2)
-    Traceback (most recent call last):
-      ...
-    IntegrityError: 1062 (23000): Duplicate entry '2000' for key 'PRIMARY'
-    '''
-    cols, args = zip(*kw.iteritems())
-    sql = 'insert into `%s` (%s) values (%s)' % (table, ','.join(['`%s`' % col for col in cols]), ','.join(['?' for i in range(len(cols))]))
-    return _update(sql, *args)
-
-def update(sql, *args):
+def _build_regex(path):
     r'''
-    Execute update SQL.
-    >>> u1 = dict(id=1000, name='Michael', email='michael@test.org', passwd='123456', last_modified=time.time())
-    >>> insert('user', **u1)
-    1
-    >>> u2 = select_one('select * from user where id=?', 1000)
-    >>> u2.email
-    u'michael@test.org'
-    >>> u2.passwd
-    u'123456'
-    >>> update('update user set email=?, passwd=? where id=?', 'michael@example.org', '654321', 1000)
-    1
-    >>> u3 = select_one('select * from user where id=?', 1000)
-    >>> u3.email
-    u'michael@example.org'
-    >>> u3.passwd
-    u'654321'
-    >>> update('update user set passwd=? where id=?', '***', '123\' or id=\'456')
-    0
+    Convert route path to regex.
+
+    >>> _build_regex('/path/to/:file')
+    '^\\/path\\/to\\/(?P<file>[^\\/]+)$'
+    >>> _build_regex('/:user/:comments/list')
+    '^\\/(?P<user>[^\\/]+)\\/(?P<comments>[^\\/]+)\\/list$'
+    >>> _build_regex(':id-:pid/:w')
+    '^(?P<id>[^\\/]+)\\-(?P<pid>[^\\/]+)\\/(?P<w>[^\\/]+)$'
     '''
-    return _update(sql, *args)
+
+    re_list=['^']
+    var_list = []
+    is_var = False
+    for v in _re_route.split(path):
+        if is_var:
+            var_name = v[1:]
+            var_list.append(var_name)
+            re_list.append(r'(?P<%s>[^\/]+)' % var_name)
+        else:
+            s = ''
+            for ch in v:
+                if ch>='0' and ch<='9':
+                    s = s + ch
+                elif ch >= 'A' and ch <= 'Z':
+                    s = s + ch
+                elif ch >= 'a' and ch <= 'z':
+                    s = s + ch
+                else:
+                    s = s + ch
+            re_list.append(s)
+        is_var = not is_var
+    re_list.append('$')
+    return ''.join(re_list)
+
+class Route(object):
+    '''
+    A Route object is a callable object.
+    '''
+
+    def __init__(self, func):
+        self.path = func.__web_route__
+        self.method = func.__web_method__
+        self.is_static = _re_route.search(self.path) is None
+        if not self.is_static:
+            self.route = re.compile(_build_regex(self.path))
+        self.func = func
+
+    def match(self,url):
+        m = self.route.match(url)
+        if m:
+            return m.groups()
+        return None
+
+    def __call__(self, *args):
+        return self.func(*args)
+
+    def __str__(self):
+        if self.is_static:
+            return 'Route(static,%s,path=%s)' % (self.method, self.path)
+        return 'Route(dynamic,%s,path=%s)' % (self.method, self.path)
+
+    __repr__ = __str__
+
+def _static_file_generator(fpath):
+    BLOCK_SIZE = 8192
+    with open(fpath,'rb') as f:
+        block = f.read(BLOCK_SIZE)
+        while block:
+            yield block
+            block = f.read(BLOCK_SIZE)
+
+class StaticFileRoute(object):
+
+    def __init__(self):
+        self.method = 'GET'
+        self.is_static = False
+        self.route = re.compile('^/static/(.+)$')
+
+    def match(self,url):
+        if url.startswith('/static/'):
+            return (url[1:],)
+        return None
+
+    def __call__(self, *args):
+        fpath = os.path.join(ctx.application.document_root,args[0])
+        if not os.path.isfile(fpath):
+            raise notfound()
+        fext = os.path.splitext(fpath)[1]
+        ctx.response.context_type = mimetypes.types_map.get(fext.lower(),'application/octet-stream')
+        return _static_file_generator(fpath)
+
+def favicon_handler():
+    return satic_file_handler('/favicon.ico')
+
+class MultipartFile(object):
+    '''
+    Multipart file storage get from request input.
+
+    f = ctx.request['file']
+    f.filename # 'test.png'
+    f.file # file-like object
+    '''
+
+    def __init__(self,storage):
+        self.filename = _to_unicode(storage.filename)
+        self.file = storage.file
+
+class Request(object):
+    '''
+    Request object for obtaining all http request information.
+    '''
+
+    def __init__(self,environ):
+        self._environ = environ
+
+    def _parse_input(self):
+        def _convert(item):
+            if isinstance(item,list):
+                return [_to_unicode(i.value) for i in item]
+            if item.filename:
+                return MultipartFile(item)
+            return _to_unicode(item.value)
+        fs = cgi.FieldStorage(fp=self._enviro['wsgi.input'],environ=self._environ,keep_blank_values=True)
+        inputs = dict()
+        for key in fs:
+            inputs[key] = _convert(fs[key])
+        return inputs
 
 if __name__=='__main__':
-    logging.basicConfig(level=logging.DEBUG)
-    create_engine('root', '', 'test')
-    update('drop table if exists user')
-    update('create table user (id int primary key, name text, email text, passwd text, last_modified real)')
+    sys.path.append('.')
     import doctest
     doctest.testmod()
