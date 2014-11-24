@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__author_ = 'Tony Xiao'
-
 '''
 A simple, lightweight, WSGI-compatible web framework.
 '''
 
-import types,os,re,cgi,sys,time,datetime,functools,mimetypes,threading,logging,urllib,traceback
+__author__ = 'Tony Xiao'
+
+import types, os, re, cgi, sys, time, datetime, functools, mimetypes, threading, logging, urllib, traceback
 
 try:
     from cStringIO import StringIO
@@ -15,6 +15,7 @@ except ImportError:
     from StringIO import StringIO
 
 # thread local object for storing request and response:
+
 ctx = threading.local()
 
 # Dict object:
@@ -24,13 +25,13 @@ class Dict(dict):
     Simple dict but support access as x.y style.
 
     >>> d1 = Dict()
-    >>> d1['x']=100
+    >>> d1['x'] = 100
     >>> d1.x
     100
     >>> d1.y = 200
     >>> d1['y']
     200
-    >>> d2 = Dict(a=1,b=2,c='3');
+    >>> d2 = Dict(a=1, b=2, c='3')
     >>> d2.c
     '3'
     >>> d2['empty']
@@ -41,7 +42,7 @@ class Dict(dict):
     Traceback (most recent call last):
         ...
     AttributeError: 'Dict' object has no attribute 'empty'
-    >>> d3 = Dict(('a','b','c'),(1,2,3))
+    >>> d3 = Dict(('a', 'b', 'c'), (1, 2, 3))
     >>> d3.a
     1
     >>> d3.b
@@ -49,28 +50,29 @@ class Dict(dict):
     >>> d3.c
     3
     '''
-    def __init__(self,names=(),values=(),**kw):
-        super(Dict,self).__init__(**kw)
-        for k,v in zip(names,values):
+    def __init__(self, names=(), values=(), **kw):
+        super(Dict, self).__init__(**kw)
+        for k, v in zip(names, values):
             self[k] = v
 
     def __getattr__(self, key):
         try:
             return self[key]
         except KeyError:
-            raise AttributeError(r"'Dict' object has no attribute '%s'" % key )
+            raise AttributeError(r"'Dict' object has no attribute '%s'" % key)
 
-    def __setattr__(self,key,value):
-        self[key] = value;
+    def __setattr__(self, key, value):
+        self[key] = value
 
 _TIMEDELTA_ZERO = datetime.timedelta(0)
 
 # timezone as UTC+8:00, UTC-10:00
+
 _RE_TZ = re.compile('^([\+\-])([0-9]{1,2})\:([0-9]{1,2})$')
 
 class UTC(datetime.tzinfo):
     '''
-    A UTC tzinfo object.
+    A UTC tzinfo object. 
 
     >>> tz0 = UTC('+00:00')
     >>> tz0.tzname(None)
@@ -96,7 +98,7 @@ class UTC(datetime.tzinfo):
     28800
     '''
 
-    def __init__(self,utc):
+    def __init__(self, utc):
         utc = str(utc.strip().upper())
         mt = _RE_TZ.match(utc)
         if mt:
@@ -104,11 +106,12 @@ class UTC(datetime.tzinfo):
             h = int(mt.group(2))
             m = int(mt.group(3))
             if minus:
-                h,m = (-h), (-m)
-                self._utcoffset = datetime.timedelta(hours=h,minutes=m)
-                self._tzname = 'UTC%s' % utc
+                h, m = (-h), (-m)
+            self._utcoffset = datetime.timedelta(hours=h, minutes=m)
+            self._tzname = 'UTC%s' % utc
         else:
             raise ValueError('bad utc time zone')
+
     def utcoffset(self, dt):
         return self._utcoffset
 
@@ -120,6 +123,7 @@ class UTC(datetime.tzinfo):
 
     def __str__(self):
         return 'UTC tzinfo object (%s)' % self._tzname
+
     __repr__ = __str__
 
 # all known response statues:
@@ -237,26 +241,26 @@ _HEADER_X_POWERED_BY = ('X-Powered-By', 'transwarp/1.0')
 class HttpError(Exception):
     '''
     HttpError that defines http error code.
+
     >>> e = HttpError(404)
     >>> e.status
     '404 Not Found'
     '''
-
-    def __init__(self,code):
+    def __init__(self, code):
         '''
         Init an HttpError with response code.
         '''
-        super(HttpError,self).__init__()
-        self.status = '%d %s' % (code,_RE_RESPONSE_STATUS[code])
+        super(HttpError, self).__init__()
+        self.status = '%d %s' % (code, _RESPONSE_STATUSES[code])
 
-    def header(self,name,value):
-        if not hasattr(self,'_headers'):
+    def header(self, name, value):
+        if not hasattr(self, '_headers'):
             self._headers = [_HEADER_X_POWERED_BY]
-        self._headers.append((name),value)
+        self._headers.append((name, value))
 
     @property
     def headers(self):
-        if hasattr(self,'_headers'):
+        if hasattr(self, '_headers'):
             return self._headers
         return []
 
@@ -275,15 +279,15 @@ class RedirectError(HttpError):
     >>> e.location
     'http://www.apple.com/'
     '''
-    def __init__(self,code,location):
+    def __init__(self, code, location):
         '''
         Init an HttpError with response code.
         '''
-        super(RedirectError,self).__init__(code)
+        super(RedirectError, self).__init__(code)
         self.location = location
 
     def __str__(self):
-        return '%s, %s' % (self.status,self.location)
+        return '%s, %s' % (self.status, self.location)
 
     __repr__ = __str__
 
@@ -440,11 +444,10 @@ def _unquote(s, encoding='utf-8'):
 def get(path):
     '''
     A @get decorator.
+
     @get('/:id')
     def index(id):
         pass
-    :param path:
-    :return:
 
     >>> @get('/test/:id')
     ... def test():
@@ -466,11 +469,6 @@ def get(path):
 def post(path):
     '''
     A @post decorator.
-    @get('/:id')
-    def index(id):
-        pass
-    :param path:
-    :return:
 
     >>> @post('/post/:id')
     ... def testpost():
@@ -502,8 +500,7 @@ def _build_regex(path):
     >>> _build_regex(':id-:pid/:w')
     '^(?P<id>[^\\/]+)\\-(?P<pid>[^\\/]+)\\/(?P<w>[^\\/]+)$'
     '''
-
-    re_list=['^']
+    re_list = ['^']
     var_list = []
     is_var = False
     for v in _re_route.split(path):
@@ -516,12 +513,12 @@ def _build_regex(path):
             for ch in v:
                 if ch>='0' and ch<='9':
                     s = s + ch
-                elif ch >= 'A' and ch <= 'Z':
+                elif ch>='A' and ch<='Z':
                     s = s + ch
-                elif ch >= 'a' and ch <= 'z':
+                elif ch>='a' and ch<='z':
                     s = s + ch
                 else:
-                    s = s + ch
+                    s = s + '\\' + ch
             re_list.append(s)
         is_var = not is_var
     re_list.append('$')
@@ -540,7 +537,7 @@ class Route(object):
             self.route = re.compile(_build_regex(self.path))
         self.func = func
 
-    def match(self,url):
+    def match(self, url):
         m = self.route.match(url)
         if m:
             return m.groups()
@@ -558,7 +555,7 @@ class Route(object):
 
 def _static_file_generator(fpath):
     BLOCK_SIZE = 8192
-    with open(fpath,'rb') as f:
+    with open(fpath, 'rb') as f:
         block = f.read(BLOCK_SIZE)
         while block:
             yield block
@@ -571,21 +568,21 @@ class StaticFileRoute(object):
         self.is_static = False
         self.route = re.compile('^/static/(.+)$')
 
-    def match(self,url):
+    def match(self, url):
         if url.startswith('/static/'):
-            return (url[1:],)
+            return (url[1:], )
         return None
 
     def __call__(self, *args):
-        fpath = os.path.join(ctx.application.document_root,args[0])
+        fpath = os.path.join(ctx.application.document_root, args[0])
         if not os.path.isfile(fpath):
             raise notfound()
         fext = os.path.splitext(fpath)[1]
-        ctx.response.context_type = mimetypes.types_map.get(fext.lower(),'application/octet-stream')
+        ctx.response.content_type = mimetypes.types_map.get(fext.lower(), 'application/octet-stream')
         return _static_file_generator(fpath)
 
 def favicon_handler():
-    return satic_file_handler('/favicon.ico')
+    return static_file_handler('/favicon.ico')
 
 class MultipartFile(object):
     '''
@@ -595,8 +592,7 @@ class MultipartFile(object):
     f.filename # 'test.png'
     f.file # file-like object
     '''
-
-    def __init__(self,storage):
+    def __init__(self, storage):
         self.filename = _to_unicode(storage.filename)
         self.file = storage.file
 
@@ -605,17 +601,17 @@ class Request(object):
     Request object for obtaining all http request information.
     '''
 
-    def __init__(self,environ):
+    def __init__(self, environ):
         self._environ = environ
 
     def _parse_input(self):
         def _convert(item):
-            if isinstance(item,list):
+            if isinstance(item, list):
                 return [_to_unicode(i.value) for i in item]
             if item.filename:
                 return MultipartFile(item)
             return _to_unicode(item.value)
-        fs = cgi.FieldStorage(fp=self._enviro['wsgi.input'],environ=self._environ,keep_blank_values=True)
+        fs = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
         inputs = dict()
         for key in fs:
             inputs[key] = _convert(fs[key])
@@ -625,11 +621,11 @@ class Request(object):
         '''
         Get raw input as dict containing values as unicode, list or MultipartFile.
         '''
-        if not hasattr(self,'_raw_input'):
+        if not hasattr(self, '_raw_input'):
             self._raw_input = self._parse_input()
         return self._raw_input
 
-    def __getitem__(self,key):
+    def __getitem__(self, key):
         '''
         Get input parameter value. If the specified key has multiple value, the first one is returned.
         If the specified key is not exist, then raise KeyError.
@@ -659,11 +655,11 @@ class Request(object):
         'just a test'
         '''
         r = self._get_raw_input()[key]
-        if isinstance(r,list):
+        if isinstance(r, list):
             return r[0]
-        return r;
+        return r
 
-    def get(self,key,default=None):
+    def get(self, key, default=None):
         '''
         The same as request[key], but return default value if key is not found.
 
@@ -675,12 +671,12 @@ class Request(object):
         >>> r.get('empty', 'DEFAULT')
         'DEFAULT'
         '''
-        r = self._get_raw_input().get(key,default)
-        if isinstance(r,list):
+        r = self._get_raw_input().get(key, default)
+        if isinstance(r, list):
             return r[0]
         return r
 
-    def gets(self,key):
+    def gets(self, key):
         '''
         Get multiple values for specified key.
 
@@ -696,11 +692,11 @@ class Request(object):
         KeyError: 'empty'
         '''
         r = self._get_raw_input()[key]
-        if isinstance(r,list):
+        if isinstance(r, list):
             return r[:]
         return [r]
 
-    def input(self,**kw):
+    def input(self, **kw):
         '''
         Get input as dict from request, fill dict using provided default value if key not exist.
 
@@ -725,8 +721,8 @@ class Request(object):
         '''
         copy = Dict(**kw)
         raw = self._get_raw_input()
-        for k,v in raw.iteritems():
-            copy[k] = v[0] if isinstance(v,list) else v
+        for k, v in raw.iteritems():
+            copy[k] = v[0] if isinstance(v, list) else v
         return copy
 
     def get_body(self):
@@ -750,18 +746,18 @@ class Request(object):
         >>> r.remote_addr
         '192.168.0.100'
         '''
-        return self._environ.get('REMOTE_ADDR','0.0.0.0')
+        return self._environ.get('REMOTE_ADDR', '0.0.0.0')
 
     @property
     def document_root(self):
-         '''
+        '''
         Get raw document_root as str. Return '' if no document_root.
 
         >>> r = Request({'DOCUMENT_ROOT': '/srv/path/to/doc'})
         >>> r.document_root
         '/srv/path/to/doc'
         '''
-        return self._environ.get('DOCUMENT_ROOT','')
+        return self._environ.get('DOCUMENT_ROOT', '')
 
     @property
     def query_string(self):
@@ -775,7 +771,7 @@ class Request(object):
         >>> r.query_string
         ''
         '''
-        return  self._environ.get('QUERY_STRING','')
+        return self._environ.get('QUERY_STRING', '')
 
     @property
     def environ(self):
@@ -816,7 +812,7 @@ class Request(object):
         >>> r.path_info
         '/test/a b.html'
         '''
-        return urllib.unquote(self._environ.get('PATH_INFO',''))
+        return urllib.unquote(self._environ.get('PATH_INFO', ''))
 
     @property
     def host(self):
@@ -827,21 +823,21 @@ class Request(object):
         >>> r.host
         'localhost:8080'
         '''
-        return self._environ.get('HTTP_HOST','')
+        return self._environ.get('HTTP_HOST', '')
 
     def _get_headers(self):
-        if not hasattr(self,'_headers'):
+        if not hasattr(self, '_headers'):
             hdrs = {}
-            for k,v in self._environ.iteritems():
+            for k, v in self._environ.iteritems():
                 if k.startswith('HTTP_'):
                     # convert 'HTTP_ACCEPT_ENCODING' to 'ACCEPT-ENCODING'
-                    hdrs[k[5:].replace('_','-').upper()] = v.decode('utf-8')
+                    hdrs[k[5:].replace('_', '-').upper()] = v.decode('utf-8')
             self._headers = hdrs
         return self._headers
 
     @property
     def headers(self):
-         '''
+        '''
         Get all HTTP headers with key as str and value as unicode. The header names are 'XXX-XXX' uppercase.
 
         >>> r = Request({'HTTP_USER_AGENT': 'Mozilla/5.0', 'HTTP_ACCEPT': 'text/html'})
@@ -857,7 +853,7 @@ class Request(object):
         '''
         return dict(**self._get_headers())
 
-    def header(self,header,default=None):
+    def header(self, header, default=None):
         '''
         Get header from request as unicode, return None if not exist, or default if specified. 
         The header name is case-insensitive such as 'USER-AGENT' or u'content-Type'.
@@ -873,23 +869,23 @@ class Request(object):
         >>> r.header('Test', u'DEFAULT')
         u'DEFAULT'
         '''
-        return self._get_headers().get(header.upper(),default)
+        return self._get_headers().get(header.upper(), default)
 
     def _get_cookies(self):
-        if not hasattr(self,'_coookies'):
+        if not hasattr(self, '_cookies'):
             cookies = {}
-            cookies_str = self._environ.get('HTTP_COOKIE')
-            if cookies_str:
-                for c in cookies_str.split(';'):
+            cookie_str = self._environ.get('HTTP_COOKIE')
+            if cookie_str:
+                for c in cookie_str.split(';'):
                     pos = c.find('=')
                     if pos>0:
                         cookies[c[:pos].strip()] = _unquote(c[pos+1:])
-            self._coookies = cookies
-        return self._coookies
+            self._cookies = cookies
+        return self._cookies
 
     @property
     def cookies(self):
-         '''
+        '''
         Return all cookies as dict. The cookie name is str and values is unicode.
 
         >>> r = Request({'HTTP_COOKIE':'A=123; url=http%3A%2F%2Fwww.example.com%2F'})
@@ -900,7 +896,7 @@ class Request(object):
         '''
         return Dict(**self._get_cookies())
 
-    def cookie(self,name,default=None):
+    def cookie(self, name, default=None):
         '''
         Return specified cookie value as unicode. Default to None if cookie not exists.
 
@@ -913,7 +909,7 @@ class Request(object):
         >>> r.cookie('test', u'DEFAULT')
         u'DEFAULT'
         '''
-        return self._get_cookies().get(name,default);
+        return self._get_cookies().get(name, default)
 
 UTC_0 = UTC('+00:00')
 
@@ -921,11 +917,11 @@ class Response(object):
 
     def __init__(self):
         self._status = '200 OK'
-        self._headers = {'CONTENT_TYPE':'text/html; charset=utf-8'}
+        self._headers = {'CONTENT-TYPE': 'text/html; charset=utf-8'}
 
     @property
     def headers(self):
-       '''
+        '''
         Return response headers as [(key1, value1), (key2, value2)...] including cookies.
 
         >>> r = Response()
@@ -935,14 +931,14 @@ class Response(object):
         >>> r.headers
         [('Content-Type', 'text/html; charset=utf-8'), ('Set-Cookie', 's1=ok; Max-Age=3600; Path=/; HttpOnly'), ('X-Powered-By', 'transwarp/1.0')]
         '''
-        L = [(_RESPONSE_HEADER_DICT.get(k,k),v) for k,v in self._headers.iteritems()]
-        if hasattr(self,'_cookies'):
+        L = [(_RESPONSE_HEADER_DICT.get(k, k), v) for k, v in self._headers.iteritems()]
+        if hasattr(self, '_cookies'):
             for v in self._cookies.itervalues():
-                L.append(('Set-Cookie',v))
+                L.append(('Set-Cookie', v))
         L.append(_HEADER_X_POWERED_BY)
         return L
 
-    def header(self,name):
+    def header(self, name):
         '''
         Get header by name, case-insensitive.
 
@@ -958,7 +954,7 @@ class Response(object):
             key = name
         return self._headers.get(key)
 
-    def unset_header(self,name):
+    def unset_header(self, name):
         '''
         Unset header by name and value.
 
@@ -974,7 +970,7 @@ class Response(object):
         if key in self._headers:
             del self._headers[key]
 
-    def set_header(self,name,value):
+    def set_header(self, name, value):
         '''
         Set header by name and value.
 
@@ -1005,12 +1001,12 @@ class Response(object):
         return self.header('CONTENT-TYPE')
 
     @content_type.setter
-    def content_type(self,value):
+    def content_type(self, value):
         '''
         Set content type for response. This is a shortcut for set_header('Content-Type', value).
         '''
         if value:
-            self.set_header('CONTENT-TYPE',value)
+            self.set_header('CONTENT-TYPE', value)
         else:
             self.unset_header('CONTENT-TYPE')
 
@@ -1028,7 +1024,7 @@ class Response(object):
         return self.header('CONTENT-LENGTH')
 
     @content_length.setter
-    def content_length(self,value):
+    def content_length(self, value):
         '''
         Set content length, the value can be int or str.
 
@@ -1040,18 +1036,18 @@ class Response(object):
         >>> r.content_length
         '8192'
         '''
-        self.set_header('CONTENT-LENGTH',str(value))
+        self.set_header('CONTENT-LENGTH', str(value))
 
-    def delete_cookie(self,name):
-         '''
+    def delete_cookie(self, name):
+        '''
         Delete a cookie immediately.
 
         Args:
           name: the cookie name.
         '''
-        self.set_cookie(name,'__deleted__',expires=0)
+        self.set_cookie(name, '__deleted__', expires=0)
 
-    def set_cookie(self,name,value,max_age=None,expires=None,path='/',domain=None,secure=False,http_only=True):
+    def set_cookie(self, name, value, max_age=None, expires=None, path='/', domain=None, secure=False, http_only=True):
         '''
         Set a cookie.
 
@@ -1079,15 +1075,15 @@ class Response(object):
         >>> r._cookies
         {'company': 'company=Expires; Expires=Sat, 14-Jul-2012 14:06:34 GMT; Path=/; HttpOnly'}
         '''
-        if not hasattr(self,'_cookies'):
-            self._cookies ={}
-        L = ['%s=%s' % (_quote(name),_quote(value))]
+        if not hasattr(self, '_cookies'):
+            self._cookies = {}
+        L = ['%s=%s' % (_quote(name), _quote(value))]
         if expires is not None:
-            if isinstance(expires,(float,int ,long))：
-                L.append('Expires=%s' % datetime.datetime.fromtimestamp(expire,UTC_0).strftime('%a, %d-%b-%Y %H:%M:%S GMT'))
-            if isinstance(expires,(datetime.date,datetime.datetime)):
+            if isinstance(expires, (float, int, long)):
+                L.append('Expires=%s' % datetime.datetime.fromtimestamp(expires, UTC_0).strftime('%a, %d-%b-%Y %H:%M:%S GMT'))
+            if isinstance(expires, (datetime.date, datetime.datetime)):
                 L.append('Expires=%s' % expires.astimezone(UTC_0).strftime('%a, %d-%b-%Y %H:%M:%S GMT'))
-        elif isinstance(max_age,(int,long)):
+        elif isinstance(max_age, (int, long)):
             L.append('Max-Age=%d' % max_age)
         L.append('Path=%s' % path)
         if domain:
@@ -1096,9 +1092,9 @@ class Response(object):
             L.append('Secure')
         if http_only:
             L.append('HttpOnly')
-        self._cookies[name] = ';'.join(L)
+        self._cookies[name] = '; '.join(L)
 
-    def unset_cookie(self,name):
+    def unset_cookie(self, name):
         '''
         Unset a cookie.
 
@@ -1110,7 +1106,7 @@ class Response(object):
         >>> r._cookies
         {}
         '''
-        if hasattr(self,'_cookies'):
+        if hasattr(self, '_cookies'):
             if name in self._cookies:
                 del self._cookies[name]
 
@@ -1149,7 +1145,7 @@ class Response(object):
         return self._status
 
     @status.setter
-    def status(self,value):
+    def status(self, value):
         '''
         Set response status as int or str.
 
@@ -1176,28 +1172,28 @@ class Response(object):
           ...
         TypeError: Bad type of response code.
         '''
-        if isinstance(value,(int,long)):
+        if isinstance(value, (int, long)):
             if value>=100 and value<=999:
-                st = _RESPONSE_STATUSES.get(value,'')
+                st = _RESPONSE_STATUSES.get(value, '')
                 if st:
                     self._status = '%d %s' % (value, st)
                 else:
                     self._status = str(value)
             else:
                 raise ValueError('Bad response code: %d' % value)
-        elif isinstance(value,basestring):
-            if isinstance(value,unicode):
+        elif isinstance(value, basestring):
+            if isinstance(value, unicode):
                 value = value.encode('utf-8')
             if _RE_RESPONSE_STATUS.match(value):
                 self._status = value
             else:
                 raise ValueError('Bad response code: %s' % value)
-        else;
-            raise TypeError('Bad type of respone code.')
+        else:
+            raise TypeError('Bad type of response code.')
 
 class Template(object):
 
-    def __init__(self,template_name,**kw):
+    def __init__(self, template_name, **kw):
         '''
         Init a template object with template name, model as dict, and additional kw that will append to model.
 
@@ -1217,10 +1213,11 @@ class TemplateEngine(object):
     '''
     Base template engine.
     '''
-    def __call__(self,path,model):
+    def __call__(self, path, model):
         return '<!-- override this method to render template -->'
 
 class Jinja2TemplateEngine(TemplateEngine):
+
     '''
     Render using jinja2 template engine.
 
@@ -1231,27 +1228,27 @@ class Jinja2TemplateEngine(TemplateEngine):
     '<p>Hello, Michael.</p><span>2014-06-01 10:11:12</span>'
     '''
 
-    def __init__(self,templ_dir,**kw):
-        from jinja2 import Environment,FileSystemLoader
+    def __init__(self, templ_dir, **kw):
+        from jinja2 import Environment, FileSystemLoader
         if not 'autoescape' in kw:
             kw['autoescape'] = True
-        self._env = Environment(loader=FileSystemLoader(templ_dir),**kw)
+        self._env = Environment(loader=FileSystemLoader(templ_dir), **kw)
 
-    def add_filter(self,name,fn_filter):
-        self._env.filters[name] = fn_filer
+    def add_filter(self, name, fn_filter):
+        self._env.filters[name] = fn_filter
 
-    def __call__(self,path,model):
+    def __call__(self, path, model):
         return self._env.get_template(path).render(**model).encode('utf-8')
 
-def _default_error_handler(e,start_resonse,is_debug):
-    if isinstance(e,HttpError):
+def _default_error_handler(e, start_response, is_debug):
+    if isinstance(e, HttpError):
         logging.info('HttpError: %s' % e.status)
         headers = e.headers[:]
-        headers.append(('Content-Type','text/html'))
-        start_resonse(e.status,headers)
+        headers.append(('Content-Type', 'text/html'))
+        start_response(e.status, headers)
         return ('<html><body><h1>%s</h1></body></html>' % e.status)
     logging.exception('Exception:')
-    start_response('500 Internal Server Error',[('Content-Type', 'text/html'), _HEADER_X_POWERED_BY])
+    start_response('500 Internal Server Error', [('Content-Type', 'text/html'), _HEADER_X_POWERED_BY])
     if is_debug:
         return _debug()
     return ('<html><body><h1>500 Internal Server Error</h1><h3>%s</h3></body></html>' % str(e))
@@ -1278,25 +1275,25 @@ def view(path):
     '''
     def _decorator(func):
         @functools.wraps(func)
-        def _wrapper(*args,**kw):
-            r = func(*args,**kw)
-            if isinstance(r,dict):
+        def _wrapper(*args, **kw):
+            r = func(*args, **kw)
+            if isinstance(r, dict):
                 logging.info('return Template')
-                return Template(path,**r)
+                return Template(path, **r)
             raise ValueError('Expect return a dict when using @view() decorator.')
         return _wrapper
     return _decorator
 
-_RE_INTERCEPTROR_STARTS_WITH = re.complie(r'^([^\*\?]+)\*?$') 
-_RE_INTERCEPTROR_ENDS_WITH = re.complie(r'\*([^\*\?]+)$') 
+_RE_INTERCEPTROR_STARTS_WITH = re.compile(r'^([^\*\?]+)\*?$')
+_RE_INTERCEPTROR_ENDS_WITH = re.compile(r'^\*([^\*\?]+)$')
 
 def _build_pattern_fn(pattern):
     m = _RE_INTERCEPTROR_STARTS_WITH.match(pattern)
     if m:
         return lambda p: p.startswith(m.group(1))
-    m = _RE_INTERCEPTROR_ENDS_WITH.match(m.group(1))
+    m = _RE_INTERCEPTROR_ENDS_WITH.match(pattern)
     if m:
-        return lambda p: p.endwith(m.group(1))
+        return lambda p: p.endswith(m.group(1))
     raise ValueError('Invalid pattern definition in interceptor.')
 
 def interceptor(pattern='/'):
@@ -1312,7 +1309,7 @@ def interceptor(pattern='/'):
         return func
     return _decorator
 
-def _build_interceptor_fn(func,next):
+def _build_interceptor_fn(func, next):
     def _wrapper():
         if func.__interceptor__(ctx.request.path_info):
             return func(next)
@@ -1320,7 +1317,7 @@ def _build_interceptor_fn(func,next):
             return next()
     return _wrapper
 
-def _build_interceptor_chain(last_fn,*interceptors):
+def _build_interceptor_chain(last_fn, *interceptors):
     '''
     Build interceptor chain.
 
@@ -1367,7 +1364,7 @@ def _build_interceptor_chain(last_fn,*interceptors):
     L.reverse()
     fn = last_fn
     for f in L:
-        fn = _build_interceptor_fn(f,fn)
+        fn = _build_interceptor_fn(f, fn)
     return fn
 
 def _load_module(module_name):
@@ -1386,14 +1383,15 @@ def _load_module(module_name):
     '''
     last_dot = module_name.rfind('.')
     if last_dot==(-1):
-        return __import__(module_name,globals(),locals())
+        return __import__(module_name, globals(), locals())
     from_module = module_name[:last_dot]
     import_module = module_name[last_dot+1:]
-    m = __import__(from_module,globals(),locals(),[import_module])
-    return getattr(m,import_module)
+    m = __import__(from_module, globals(), locals(), [import_module])
+    return getattr(m, import_module)
 
 class WSGIApplication(object):
-    def __init__(self,document_root=None,**kw):
+
+    def __init__(self, document_root=None, **kw):
         '''
         Init a WSGIApplication.
 
@@ -1421,20 +1419,20 @@ class WSGIApplication(object):
         return self._template_engine
 
     @template_engine.setter
-    def template_engine(self,engine):
+    def template_engine(self, engine):
         self._check_not_running()
         self._template_engine = engine
 
-    def add_module(self,mod):
+    def add_module(self, mod):
         self._check_not_running()
         m = mod if type(mod)==types.ModuleType else _load_module(mod)
         logging.info('Add module: %s' % m.__name__)
         for name in dir(m):
-            fn = getattr(m,name)
-            if callable(fn) and hasattr(fn,'__web_route__') and hasattr(fn,'__web_method__'):
+            fn = getattr(m, name)
+            if callable(fn) and hasattr(fn, '__web_route__') and hasattr(fn, '__web_method__'):
                 self.add_url(fn)
 
-    def add_url(self,func):
+    def add_url(self, func):
         self._check_not_running()
         route = Route(func)
         if route.is_static:
@@ -1444,23 +1442,23 @@ class WSGIApplication(object):
                 self._post_static[route.path] = route
         else:
             if route.method=='GET':
-                self._get_dynamic[route.path] = route
+                self._get_dynamic.append(route)
             if route.method=='POST':
-                self._post_dynamic[route.path] = route
+                self._post_dynamic.append(route)
         logging.info('Add route: %s' % str(route))
 
-    def add_interceptor(self,func):
+    def add_interceptor(self, func):
         self._check_not_running()
         self._interceptors.append(func)
         logging.info('Add interceptor: %s' % str(func))
 
-    def run(self,port=9000,host='127.0.0.1'):
+    def run(self, port=9000, host='127.0.0.1'):
         from wsgiref.simple_server import make_server
-        logging.info('application (%s) will start at %s:%s...' % (self._document_root,host,port))
-        server = make_server(host,port,self.get_wsgi_application(debug=True))
+        logging.info('application (%s) will start at %s:%s...' % (self._document_root, host, port))
+        server = make_server(host, port, self.get_wsgi_application(debug=True))
         server.serve_forever()
 
-    def get_wsgi_application(self,debug=False)
+    def get_wsgi_application(self, debug=False):
         self._check_not_running()
         if debug:
             self._get_dynamic.append(StaticFileRoute())
@@ -1469,10 +1467,10 @@ class WSGIApplication(object):
         _application = Dict(document_root=self._document_root)
 
         def fn_route():
-            request_method = ctx.request_method
+            request_method = ctx.request.request_method
             path_info = ctx.request.path_info
-            if request_method = 'GET':
-                fn = self._get_static.get(path_info,None)
+            if request_method=='GET':
+                fn = self._get_static.get(path_info, None)
                 if fn:
                     return fn()
                 for fn in self._get_dynamic:
@@ -1481,47 +1479,47 @@ class WSGIApplication(object):
                         return fn(*args)
                 raise notfound()
             if request_method=='POST':
-                fn = self._post_static.get(path_info,None)
+                fn = self._post_static.get(path_info, None)
                 if fn:
                     return fn()
-                for fn in self._get_dynamic:
+                for fn in self._post_dynamic:
                     args = fn.match(path_info)
                     if args:
                         return fn(*args)
                 raise notfound()
             raise badrequest()
 
-        fn_exec = _build_interceptor_chain(fn_route,*self._interceptors)
+        fn_exec = _build_interceptor_chain(fn_route, *self._interceptors)
 
-        def wsgi(env,start_response):
+        def wsgi(env, start_response):
             ctx.application = _application
             ctx.request = Request(env)
             response = ctx.response = Response()
             try:
                 r = fn_exec()
-                if isinstance(r,Template):
-                    r = self._template_engine(r.template_name,r,model)
-                if isinstance(r,unicode):
+                if isinstance(r, Template):
+                    r = self._template_engine(r.template_name, r.model)
+                if isinstance(r, unicode):
                     r = r.encode('utf-8')
                 if r is None:
                     r = []
-                start_response(response.status,response.headers)
+                start_response(response.status, response.headers)
                 return r
             except RedirectError, e:
-                response.set_header('Location',e.location)
-                start_response(e.status,response.headers)
+                response.set_header('Location', e.location)
+                start_response(e.status, response.headers)
                 return []
             except HttpError, e:
-                start_response(e.status,response.headers)
-                return ['<html><body><h1>',e.status,'</h1></body><html>']
+                start_response(e.status, response.headers)
+                return ['<html><body><h1>', e.status, '</h1></body></html>']
             except Exception, e:
                 logging.exception(e)
                 if not debug:
-                    start_response('500 Internal Server Error',[])
+                    start_response('500 Internal Server Error', [])
                     return ['<html><body><h1>500 Internal Server Error</h1></body></html>']
-                exc_type,exc_value,exc_traceback = sys.exc_info()
+                exc_type, exc_value, exc_traceback = sys.exc_info()
                 fp = StringIO()
-                traceback.print_exception(exc_type,exc_value,exc_traceback,file=fp)
+                traceback.print_exception(exc_type, exc_value, exc_traceback, file=fp)
                 stacks = fp.getvalue()
                 fp.close()
                 start_response('500 Internal Server Error', [])
